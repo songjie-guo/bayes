@@ -1,0 +1,171 @@
+## Setup
+
+```{r}
+suppressPackageStartupMessages(require(rstan))
+suppressPackageStartupMessages(require(magrittr))
+suppressPackageStartupMessages(require(tidybayes))
+suppressPackageStartupMessages(require(ggplot2))
+suppressPackageStartupMessages(require(bayesplot))
+library(dplyr)
+```
+
+```{r}
+data = read.csv("19SSR.csv")
+data$Time_spent_on_Online_Class <- as.integer(data$Time_spent_on_Online_Class)
+```
+
+## Change Point Analysis
+
+```{r}
+dat3 = data %>%
+  group_by(Age_of_Subject) %>%
+  summarize(mean_time_spent = mean(Time_spent_on_Online_Class))
+
+data3 = data[, c("Age_of_Subject", "Time_spent_on_Online_Class")]
+```
+
+```{r}
+dat3$mean_time_spent = as.integer(dat3$mean_time_spent)
+plot(dat3)
+```
+
+```{r}
+min(data$Age_of_Subject)
+max(data$Age_of_Subject)
+```
+
+$$
+\begin{aligned}
+p_i &\sim \mathrm{BetaMP}(0.1,10), \text{ for }i \in \{1, 2\},\;\;\text{(parameters for 2 clusters)} \\
+C&\sim \mathrm{Unif}\{7, 8, \dots 59\} , \;\;\text{(change point)} \\
+Y_{\text{age}} &\sim {\mathrm{Binom}}(24,p_{\mathbb{1}[\text{age} < C] + 1}), \text{ for age} \in \{7, 8, \dots, 59\} \;\;\text{(likelihood)}.
+\end{aligned}
+$$
+
+$$
+\alpha = \mu \lambda = 1 \quad \beta = (1-\mu)\lambda = 9
+$$
+
+```{r}
+log_joint = function(probs, change_point, y) {
+  # Return log(0.0) if parameters are outside of the support
+  if (probs[[1]] <= 0 | probs[[1]] >= 1 | probs[[2]] <= 0 | probs[[2]] >= 1 | !(change_point %in% dat3$Age_of_Subject))
+  return(-Inf)
+  log_prior = dbeta(probs[[1]], 1, 9, log = TRUE) + dbeta(probs[[2]], 1, 9, log = TRUE)
+  log_likelihood = 0.0
+  for (i in 1:length(y)) {
+    prob = if (i < change_point) probs[[1]] else probs[[2]]
+    log_likelihood = log_likelihood + dbinom(y[[i]], 24, prob, log = TRUE)
+  }
+  return(log_prior + log_likelihood)
+}
+```
+
+```{r}
+probs_proposal = function(probs){probs + rnorm(length(probs))}
+change_point_proposal = function(change_point) {
+  change_point + (rbinom(1,106,0.5)-53)
+}
+```
+
+```{r}
+mcmc = function(probs, change_point, y, n_iterations) {
+  change_point_trace = integer(n_iterations)
+  
+  for (i in 1:n_iterations) {
+    # sample probs
+    proposed_probs = probs_proposal(probs)
+    ratio = exp(log_joint(proposed_probs, change_point, y) -log_joint(probs, change_point, y))
+
+    if (runif(1) < ratio) {
+      probs = proposed_probs
+    }
+    
+    # sample change point
+    proposed_change_point = change_point_proposal(change_point)
+    ratio = exp(log_joint(probs, proposed_change_point, y) - log_joint(probs, change_point, y))
+    if (runif(1) < ratio) {
+      change_point = proposed_change_point
+    }
+    change_point_trace[i] = change_point
+  }
+  
+  # Return:
+  # - the trace of the change points
+  # - the probs at the last iteration
+  return(
+    list(
+      change_point_trace = change_point_trace, 
+      last_iteration_probs = probs
+    )
+  )
+}
+```
+
+```{r}
+# MCMC correctness testing
+forward = function(synthetic_data_size) {
+  probs = rbeta(2, 1, 9)
+  change_point = sample(7:(7+synthetic_data_size-1), 1)
+  data = integer(synthetic_data_size)
+  for (i in 1:synthetic_data_size) {
+    prob = probs[ifelse(i < change_point, 1, 2)]
+    data[i] = rbinom(1, 24, prob)
+  }
+  return(list(
+    probs = probs,
+    change_point = change_point,
+    data = data
+  ))
+}
+
+forward_posterior = function(synthetic_data_size, n_mcmc_iters) {
+  initial = forward(synthetic_data_size)
+  
+  if (n_mcmc_iters > 0) {
+    samples = mcmc(initial$probs, initial$change_point, initial$data, n_mcmc_iters)
+    return(samples$last_iteration_probs[[1]])
+  } else {
+    return(initial$probs[[1]])
+  }
+}
+```
+
+```{r}
+# Note: we use synthetic datasets with only 5 observations to speed things up
+set.seed(1)
+forward_only = replicate(1000, forward_posterior(5, 0))
+with_mcmc = replicate(1000, forward_posterior(5, 200))
+
+print(ks.test(forward_only, with_mcmc))
+print(t.test(forward_only, with_mcmc, alternative = "two.sided", var.equal = FALSE))
+```
+
+No significant issues found.
+
+```{r}
+set.seed(1)
+prior_sample = forward(length(dat3))[1:2] 
+samples = mcmc(prior_sample$probs, prior_sample$change_point, dat3$mean_time_spent, 10000)
+```
+
+```{r}
+plot_traces = function(samples){
+plot(samples, type = "s", col = rgb(red = 0, green = 0, blue = 0, alpha = 0.2))
+points(samples, col = rgb(red = 0, green = 0, blue = 0, alpha = 0.2))
+}
+```
+
+```{r}
+plot_traces(samples$change_point_trace)
+```
+
+```{r}
+ggplot(as.data.frame(samples), aes(change_point_trace)) +
+  geom_density(alpha = 0.5) +
+  geom_vline(xintercept = 12, linetype = "dashed") +
+  annotate("text", x = 12, y = 0.07, label = "x = 12", size = 4, vjust = -0.5) +
+  geom_vline(xintercept = 37, linetype = "dashed") +
+  annotate("text", x = 37, y = 0.07, label = "x = 37", size = 4, vjust = -0.5) +
+  theme_minimal()
+```

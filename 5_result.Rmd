@@ -1,0 +1,69 @@
+```{r}
+suppressPackageStartupMessages(require(rstan))
+suppressPackageStartupMessages(require(ggplot2))
+suppressPackageStartupMessages(require(dplyr))
+suppressPackageStartupMessages(require(tidybayes))
+```
+
+```{r}
+data = read.csv("19SSR.csv")
+data$Time_spent_on_Online_Class <- as.integer(data$Time_spent_on_Online_Class)
+```
+
+```{r}
+df = data[,c("Age_of_Subject", "Time_spent_on_Online_Class")]
+```
+
+## Estimator 1)
+
+```{r}
+age <- c(rep(7:17, each = 1), rep(18:22, each = 1), rep(23:59, each = 1))
+mean_time_spent_pred <- c(rep(3.69, times = 11), rep(2.98, times = 5), rep(2.65, times = 37))
+
+df_pred <- data.frame(Age_of_Subject = age, mean_time_spent_pred = mean_time_spent_pred)
+merged_df <- merge(df, df_pred, by = "Age_of_Subject")
+actual = merged_df$Time_spent_on_Online_Class
+predicted = merged_df$mean_time_spent_pred
+
+mae <- mean(abs(actual - predicted))
+print(paste("MAE:", mae))
+
+rmse <- sqrt(mean((actual - predicted)^2))
+print(paste("RMSE:", rmse))
+```
+
+## Estimator 2)
+
+```{r}
+age <- c(rep(7:17, each = 1), rep(18:22, each = 1), rep(23:59, each = 1))
+mean_time_spent_pred <- c(rep(4.38, times = 11), rep(2.79, times = 5), rep(2.71, times = 37))
+
+df_pred <- data.frame(Age_of_Subject = age, mean_time_spent_pred = mean_time_spent_pred)
+merged_df <- merge(df, df_pred, by = "Age_of_Subject")
+actual = merged_df$Time_spent_on_Online_Class
+predicted = merged_df$mean_time_spent_pred
+
+mae <- mean(abs(actual - predicted))
+print(paste("MAE:", mae))
+
+rmse <- sqrt(mean((actual - predicted)^2))
+print(paste("RMSE:", rmse))
+```
+
+## Estimator 3)
+
+```{r}
+age <- c(rep(7:12, each = 1), rep(13:37, each = 1), rep(38:59, each = 1))
+mean_time_spent_pred <- c(rep(3.58, times = 6), rep(3.17, times = 25), rep(2.91, times = 22))
+
+df_pred <- data.frame(Age_of_Subject = age, mean_time_spent_pred = mean_time_spent_pred)
+merged_df <- merge(df, df_pred, by = "Age_of_Subject")
+actual = merged_df$Time_spent_on_Online_Class
+predicted = merged_df$mean_time_spent_pred
+
+mae <- mean(abs(actual - predicted))
+print(paste("MAE:", mae))
+
+rmse <- sqrt(mean((actual - predicted)^2))
+print(paste("RMSE:", rmse))
+```

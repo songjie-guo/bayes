@@ -1,0 +1,170 @@
+## Setup
+
+```{r}
+suppressPackageStartupMessages(require(rstan))
+suppressPackageStartupMessages(require(ggplot2))
+suppressPackageStartupMessages(require(dplyr))
+suppressPackageStartupMessages(require(tidybayes))
+suppressPackageStartupMessages(require(bayesplot))
+```
+
+```{r}
+data = read.csv("19SSR.csv")
+data$Time_spent_on_Online_Class <- as.integer(data$Time_spent_on_Online_Class)
+```
+
+## Updated Hierarchical Model
+
+```{r}
+data$Age_Group = cut(data$Age_of_Subject, breaks = c(6,12,37,59), labels = c("7-12", "13-37", "38-59"))
+data$Age_Group = as.factor(data$Age_Group)
+```
+
+```{r}
+ggplot(data, aes(Time_spent_on_Online_Class, fill = Age_Group)) +
+  geom_density(alpha = 0.15) 
+```
+
+```{r}
+mean(data$Time_spent_on_Online_Class)/24
+```
+
+$$
+\begin{aligned}
+\mu &\sim \mathrm{BetaMP}(0.1, 10)\\\lambda &\sim \mathrm{Exp}(0.001)\\p_i \mid \mu, \lambda &\sim \mathrm{BetaMP}(\mu, \lambda), \quad i\in \{1,2,3\}\\Y_i &\sim \mathrm{Binom} (24,p_i)
+\end{aligned}
+$$
+
+```{r}
+data1 = data[, c("Age_Group", "Time_spent_on_Online_Class")]
+original_levels = levels(data1$Age_Group)
+stan_converted = compose_data(data1)
+```
+
+```{stan output.var="age_and_online_study"}
+data {
+  int n;
+  int n_Age_Group;
+  array[n] int<lower=0,upper=n_Age_Group> Age_Group;
+  array[n] int Time_spent_on_Online_Class;
+}
+
+parameters {
+  real<lower=0,upper=1> mu;
+  real<lower=0> lambda;
+  vector<lower=0,upper=1>[n_Age_Group] probs;
+}
+model {
+  mu ~ beta_proportion(0.1, 10);
+  lambda ~ exponential(0.001);
+  
+  for (age_group in 1:n_Age_Group) {
+    probs[age_group] ~ beta_proportion(0.1, 10);
+  }
+
+  for (i in 1:n) {
+    Time_spent_on_Online_Class[i] ~ binomial(24, probs[Age_Group[i]]);
+  }
+}
+generated quantities {
+  array[n_Age_Group] int<lower=0, upper=24> y_pred = binomial_rng(24, probs);
+}
+```
+
+```{r}
+fit = sampling(
+  age_and_online_study,
+  seed = 1,
+  data = stan_converted, 
+  refresh = 0,
+  chains = 2,
+  iter = 2000                  
+)
+```
+
+```{r}
+fit
+```
+
+```{r}
+df = fit %>% spread_draws(probs[age_group])
+df$age_group = factor(df$age_group, labels = original_levels)
+```
+
+```{r}
+df %>%
+  ggplot(aes(x = probs, y = age_group)) +
+  stat_halfeye() + 
+  theme_minimal()
+```
+
+## Correctness check
+
+```{r}
+mcmc_trace(fit, pars = c("mu")) + theme_minimal()
+mcmc_trace(fit, pars = c("lambda")) + theme_minimal()
+mcmc_trace(fit, pars = c("probs[1]")) + theme_minimal()
+mcmc_trace(fit, pars = c("probs[2]")) + theme_minimal()
+mcmc_trace(fit, pars = c("probs[3]")) + theme_minimal()
+```
+
+```{r}
+mcmc_rank_hist(fit, pars = c("mu")) + theme_minimal()
+mcmc_rank_hist(fit, pars = c("lambda")) + theme_minimal()
+mcmc_rank_hist(fit, pars = c("probs[1]")) + theme_minimal()
+mcmc_rank_hist(fit, pars = c("probs[2]")) + theme_minimal()
+mcmc_rank_hist(fit, pars = c("probs[3]")) + theme_minimal()
+```
+
+## Calibration
+
+```{r}
+ci_level = 0.8
+ci_plims = c((1-ci_level)/2, (1+ci_level)/2) # probability limits of the CI
+N_obs = nrow(data1)
+N_train = N_obs-1
+ci_limits = matrix(0, nrow=N_obs, 2) # n_row is set
+```
+
+```{r}
+for(i_test in 1:N_obs){
+  # if (i_test %% 50 == 0) {
+  #   print(i_test)
+  # } # can be omitted
+  train_test_dta = list(
+    n = N_train,
+    n_Age_Group = stan_converted$n_Age_Group,
+    Age_Group = stan_converted$Age_Group[-i_test],
+    Time_spent_on_Online_Class = stan_converted$Time_spent_on_Online_Class[-i_test]
+  )
+  mcmc_results = sampling(
+    age_and_online_study,
+    data = train_test_dta,
+    seed = 1,
+    chains = 1,
+    iter = 2000,
+    refresh = 0
+  )
+  samples = extract(mcmc_results)
+  ci_limits[i_test,] = quantile(samples$y_pred, ci_plims)
+}
+```
+
+```{r}
+merged_df = data1 %>%
+  bind_cols(data.frame(CI_L = ci_limits[,1], CI_R = ci_limits[,2])) %>%
+  mutate(Inside_CI = (Time_spent_on_Online_Class >= CI_L & Time_spent_on_Online_Class <= CI_R))
+```
+
+```{r}
+mean(merged_df$Inside_CI)
+```
+
+```{r}
+# merged_df[1:25,] %>%
+#   ggplot(aes(x = 1:25, y = Time_spent_on_Online_Class, ymin = CI_L, ymax = CI_R, color=Inside_CI)) +
+#   geom_point() +
+#   geom_errorbar() +
+#   theme_minimal() +
+#   labs(x = "Point", y = "Time_spent_on_Online_Class")
+```

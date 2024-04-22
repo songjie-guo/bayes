@@ -1,0 +1,77 @@
+## Setup
+
+```{r}
+suppressPackageStartupMessages(require(rstan))
+suppressPackageStartupMessages(require(magrittr))
+suppressPackageStartupMessages(require(tidybayes))
+suppressPackageStartupMessages(require(ggplot2))
+suppressPackageStartupMessages(require(bayesplot))
+library(dplyr)
+```
+
+```{r}
+data = read.csv("19SSR.csv")
+data$Time_spent_on_Online_Class <- as.integer(data$Time_spent_on_Online_Class)
+```
+
+## A Simple Regression Model
+
+```{r}
+df = data %>%
+  group_by(Age_of_Subject) %>%
+  summarize(mean_time_spent = mean(Time_spent_on_Online_Class))
+df$mean_time_spent = as.integer(df$mean_time_spent)
+```
+
+```{r}
+plot(df)
+```
+
+```{r}
+source("simple.R")
+source("simple_utils.R")
+```
+
+```{r}
+logistic_regression = function() {
+  intercept = simulate(Norm(0, 1))
+  slope = simulate(Norm(0, 1))
+  for (i in nrow(df)){
+    prob = plogis(intercept + df$Age_of_Subject[i]*slope)
+    observe(df$mean_time_spent[i], Binom(24,prob))
+  }
+  return(c(intercept, slope))
+}
+```
+
+```{r}
+set.seed(1)
+posterior(logistic_regression, 10000)
+```
+
+```{r}
+# intercept = -0.03198158
+# slope = -0.03546699
+```
+
+```{r}
+set.seed(1)
+posterior = posterior_particles(logistic_regression, 10000)
+```
+
+```{r}
+set.seed(1)
+times = df$mean_time_spent
+plot(times, ylab = "mean_time_spent", xlab = "Age_of_Subject")
+xs = 7:59
+
+samples = posterior$samples 
+norm_weights = posterior$weights / sum(posterior$weights)
+
+for (i in 1:nrow(samples)) {
+  intercept = samples[i, 1]
+  slope     = samples[i, 2]
+  pr = norm_weights[i]
+  lines(24*plogis(intercept + slope * xs), col = rgb(red = 0, green = 0, blue = 0, alpha = pr*20))
+}
+```
